@@ -2,9 +2,8 @@ import argparse
 import json
 from pathlib import Path
 from llm_sdk import Small_LLM_Model
-from src.schema import load_function_definitions  # Assuming your pydantic code is here
-from src.vocab_filter import VocabFilter
-from src.engine import ConstrainedEngine
+from src.schema import load_function_definitions
+from src.engine import ConstrainedEngine, VocabFilter
 
 def main():
     parser = argparse.ArgumentParser(description="Call Me Maybe - Constrained Generation CLI")
@@ -13,7 +12,6 @@ def main():
     parser.add_argument("--output", type=str, default="data/output/function_calling_results.json")
     args = parser.parse_args()
 
-    # 1. Graceful Schema and Input Loading
     functions = load_function_definitions(args.functions_definition)
     if not functions:
         print("Failed to load function schemas. Exiting.")
@@ -26,7 +24,6 @@ def main():
         print(f"Error reading input file: {e}")
         return
 
-    # 2. Initialize Core components
     print("Loading LLM model components...")
     llm = Small_LLM_Model()
     vocab_path = llm.get_path_to_vocab_file()
@@ -35,18 +32,14 @@ def main():
 
     results = []
 
-    # 3. Main execution loop over prompts
     for test in tests:
         prompt = test.get("prompt", "")
         print(f"Processing prompt: {prompt}")
         
-        # Run through your constrained state-machine
-        # Note: You'll pass your pydantic schema list here
         raw_output = engine.generate_function_call(prompt, [f.model_dump() for f in functions])
         
         if raw_output:
             try:
-                # Parse the generated valid string into the required final format
                 parsed_json = json.loads(raw_output)
                 results.append({
                     "prompt": prompt,
@@ -56,7 +49,6 @@ def main():
             except Exception as parse_err:
                 print(f"Error structuring output JSON: {parse_err}")
                 
-    # 4. Save results securely using context managers
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     
