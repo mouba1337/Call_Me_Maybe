@@ -6,9 +6,11 @@ from llm_sdk import Small_LLM_Model
 from src.engine import ConstrainedEngine
 from src.schema import load_function_definitions
 from src.vocab import VocabFilter
+import time 
 
 
 def main() -> None:
+    start_all = time.time()
     """Main CLI entry point for the Call Me Maybe constrained generator."""
     parser = argparse.ArgumentParser(
         description="Call Me Maybe - Constrained Generation CLI"
@@ -54,7 +56,11 @@ def main() -> None:
         return
 
     print("Loading LLM model components...")
+    t0 = time.time()
+
     llm = Small_LLM_Model()
+    print(f"[TIME] model init: {time.time() - t0:.2f}s")
+
     vocab_path = Path(llm.get_path_to_vocab_file())
     vocab_filter = VocabFilter(vocab_path=vocab_path, llm=llm)
     engine = ConstrainedEngine(llm=llm, vocab_filter=vocab_filter)
@@ -62,14 +68,19 @@ def main() -> None:
     results = []
 
     # 4. Process each prompt through the LLM engine
-    for test in tests:
+    for i, test in enumerate(tests):
+        t1 = time.time()
+
         prompt = test.get("prompt", "") if isinstance(test, dict) else ""
         if not prompt:
             continue
 
         raw_output = engine.generate_function_call(
-            prompt, [f.model_dump() for f in functions]
+            prompt,
+            [f.model_dump() for f in functions],
+            max_tokens=40
         )
+        print(f"[TIME] prompt #{i}: {time.time() - t1:.2f}s")
 
         if raw_output:
             try:
@@ -97,6 +108,7 @@ def main() -> None:
                     "parameters": {},
                 }
             )
+    print(f"[TIME] total runtime: {time.time() - start_all:.2f}s")
     # 5. Write the final compliant output file
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)

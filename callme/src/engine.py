@@ -19,7 +19,6 @@ class ConstrainedEngine(BaseModel):
 
     llm: Small_LLM_Model
     vocab_filter: VocabFilter
-    max_tokens: int = 150
 
     def _mask_logits(self, logits: List[float], allowed_ids: Set[int]) -> List[float]:
         if not allowed_ids:
@@ -94,7 +93,7 @@ class ConstrainedEngine(BaseModel):
 
         return "string"
 
-    def _determine_allowed_tokens(self, state: ParserState, current_text: str, schema: List[Dict[str, Any]], current_step: int) -> Set[int]:
+    def _determine_allowed_tokens(self, state: ParserState, current_text: str, schema: List[Dict[str, Any]], current_step: int, max_tokens: int) -> Set[int]:
         if state == ParserState.EXPECTING_PARAM_VALUE:
             expected_type = self._determine_expected_type(current_text, schema)
             
@@ -105,10 +104,12 @@ class ConstrainedEngine(BaseModel):
             else:
                 # String type: Allow all valid tokens, UNLESS we are running out of time.
                 # If we are within 3 tokens of the maximum limit, force it to close the quote.
-                if self.max_tokens - current_step <= 3:
+                if max_tokens - current_step <= 3:
                     return self.vocab_filter.get_tokens_by_chars('"')
                     
+
                 return set(self.vocab_filter.vocab.values())
+
 
         # Structure mode: Only allow numbers and basic JSON syntax (No alphabet!)
         structural_chars = '0123456789_:,{}[]" \n\t.-'
@@ -126,7 +127,7 @@ class ConstrainedEngine(BaseModel):
 
         return ParserState.EXPECTING_STRUCTURE
 
-    def generate_function_call(self, prompt: str, schema: List[Dict[str, Any]]) -> Optional[str]:
+    def generate_function_call(self, prompt: str, schema: List[Dict[str, Any]], max_tokens=48) -> Optional[str]:
         try:
             sys_prompt = (
                 "You are a strict JSON formatting AI. Output ONLY a valid JSON object.\n"
@@ -142,22 +143,23 @@ class ConstrainedEngine(BaseModel):
             generated_ids: List[int] = []
             current_state = ParserState.EXPECTING_STRUCTURE
 
-            for _ in range(self.max_tokens):
+            for _ in range(max_tokens):
                 current_text = self.llm.decode(generated_ids) if generated_ids else ""
                 
                 # Instant early stopping without regex
                 clean_text = current_text.strip()
-                if clean_text.startswith("{") and clean_text.endswith("}") and clean_text.count("{") == clean_text.count("}") and clean_text.count("{") > 0:
+                if clean_text.startswith("{") and clean_text.endswith("}"):
                     try:
-                        json.loads(clean_text)
-                        break 
+                        obj = json.loads(clean_text)
+                        if isinstance(obj, dict) and "name" in obj and "parameters" in obj:
+                            return clean_text
                     except Exception:
                         pass
 
                 context = input_ids + generated_ids
                 logits = self.llm.get_logits_from_input_ids(context)
 
-                allowed_ids = self._determine_allowed_tokens(current_state, current_text, schema, len(generated_ids))
+                allowed_ids = self._determine_allowed_tokens(current_state, current_text, schema, len(generated_ids), max_tokens)
 
                 if allowed_ids:
                     logits = self._mask_logits(logits, allowed_ids)
