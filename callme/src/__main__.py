@@ -78,7 +78,7 @@ def main() -> None:
         raw_output = engine.generate_function_call(
             prompt,
             [f.model_dump() for f in functions],
-            max_tokens=40
+            max_tokens=120
         )
         print(f"[TIME] prompt #{i}: {time.time() - t1:.2f}s")
 

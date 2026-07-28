@@ -3,7 +3,7 @@ from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Set
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from llm_sdk import Small_LLM_Model
 
 from src.vocab import VocabFilter
@@ -15,6 +15,7 @@ class ParserState(Enum):
 
 
 class ConstrainedEngine(BaseModel):
+    token_set_cache: Dict[str, Set[int]] = Field(default_factory=dict)
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
     llm: Small_LLM_Model
@@ -93,27 +94,50 @@ class ConstrainedEngine(BaseModel):
 
         return "string"
 
-    def _determine_allowed_tokens(self, state: ParserState, current_text: str, schema: List[Dict[str, Any]], current_step: int, max_tokens: int) -> Set[int]:
+    def _get_cached_allowed_tokens(self, key: str, producer) -> Set[int]:
+        cached = self.token_set_cache.get(key)
+        if cached is not None:
+            return cached
+        value = producer()
+        self.token_set_cache[key] = value
+        return value
+    # 3) replace _determine_allowed_tokens with this cached version
+    def _determine_allowed_tokens(
+        self,
+        state: ParserState,
+        current_text: str,
+        schema: List[Dict[str, Any]],
+        current_step: int,
+        max_tokens: int
+    ) -> Set[int]:
         if state == ParserState.EXPECTING_PARAM_VALUE:
             expected_type = self._determine_expected_type(current_text, schema)
-            
+
             if expected_type in ("number", "integer", "float"):
-                return self.vocab_filter.get_tokens_by_chars("0123456789.- \t\n,}")
+                return self._get_cached_allowed_tokens(
+                    "value:number",
+                    lambda: self.vocab_filter.get_tokens_by_chars("0123456789.- \t\n,}")
+                )
+
             elif expected_type == "boolean":
-                return self.vocab_filter.get_boolean_tokens()
+                return self._get_cached_allowed_tokens(
+                    "value:boolean",
+                    lambda: self.vocab_filter.get_boolean_tokens()
+                )
+
             else:
-                # String type: Allow all valid tokens, UNLESS we are running out of time.
-                # If we are within 3 tokens of the maximum limit, force it to close the quote.
-                if max_tokens - current_step <= 3:
-                    return self.vocab_filter.get_tokens_by_chars('"')
-                    
+            # full vocab set is also cacheable
+                return self._get_cached_allowed_tokens(
+                    "value:string:full_vocab",
+                    lambda: set(self.vocab_filter.vocab.values())
+                )
 
-                return set(self.vocab_filter.vocab.values())
-
-
-        # Structure mode: Only allow numbers and basic JSON syntax (No alphabet!)
-        structural_chars = '0123456789_:,{}[]" \n\t.-'
-        return self.vocab_filter.get_tokens_by_chars(structural_chars)
+    # Structure mode cache
+        structural_chars = '0123456789_:,{}[]" \n\t.-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
+        return self._get_cached_allowed_tokens(
+            "structure:default",
+            lambda: self.vocab_filter.get_tokens_by_chars(structural_chars)
+        )
 
     def _update_state(self, current_text: str) -> ParserState:
         # Strip escaped quotes to safely count actual string delimiters
@@ -127,8 +151,9 @@ class ConstrainedEngine(BaseModel):
 
         return ParserState.EXPECTING_STRUCTURE
 
-    def generate_function_call(self, prompt: str, schema: List[Dict[str, Any]], max_tokens=48) -> Optional[str]:
+    def generate_function_call(self, prompt: str, schema: List[Dict[str, Any]], max_tokens=120) -> Optional[str]:
         try:
+            self.token_set_cache.clear()
             sys_prompt = (
                 "You are a strict JSON formatting AI. Output ONLY a valid JSON object.\n"
                 'Format: {"name": "function_name", "parameters": {"arg_name": arg_value}}\n\n'
@@ -143,10 +168,17 @@ class ConstrainedEngine(BaseModel):
             generated_ids: List[int] = []
             current_state = ParserState.EXPECTING_STRUCTURE
 
+            # Start state initialized right before the loop
+            current_state = ParserState.EXPECTING_STRUCTURE
+
             for _ in range(max_tokens):
+                # 1. Decode ONCE per loop
                 current_text = self.llm.decode(generated_ids) if generated_ids else ""
                 
-                # Instant early stopping without regex
+                # 2. Update state using the text we ALREADY decoded
+                current_state = self._update_state(current_text)
+                
+                # 3. Instant early stopping without regex
                 clean_text = current_text.strip()
                 if clean_text.startswith("{") and clean_text.endswith("}"):
                     try:
@@ -156,19 +188,19 @@ class ConstrainedEngine(BaseModel):
                     except Exception:
                         pass
 
+                # 4. Neural Network pass
                 context = input_ids + generated_ids
                 logits = self.llm.get_logits_from_input_ids(context)
 
+                # 5. Token masking
                 allowed_ids = self._determine_allowed_tokens(current_state, current_text, schema, len(generated_ids), max_tokens)
 
                 if allowed_ids:
                     logits = self._mask_logits(logits, allowed_ids)
 
+                # 6. Append next token and loop directly! (NO DECODING HERE)
                 next_token_id = int(np.argmax(logits))
                 generated_ids.append(next_token_id)
-
-                new_text = self.llm.decode(generated_ids)
-                current_state = self._update_state(new_text)
 
             raw_output = self.llm.decode(generated_ids).strip()
             
