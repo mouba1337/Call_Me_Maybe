@@ -85,6 +85,23 @@ def main() -> None:
         if raw_output:
             try:
                 parsed_json = json.loads(raw_output)
+                 # 1. Extract the raw name and parameters
+                func_name = parsed_json.get("name")
+                params = parsed_json.get("parameters", {})
+                
+                # 2. Find the matching function in your loaded Pydantic schema
+                target_func = next((f for f in functions if f.name == func_name), None)
+                
+                # 3. Check types securely against the schema
+                if target_func:
+                    for p_name, p_val in params.items():
+                        if p_name in target_func.parameters:
+                            expected_type = target_func.parameters[p_name].type
+                            
+                            # ONLY force float if schema explicitly expects "number"
+                            if expected_type == "number" and isinstance(p_val, int) and not isinstance(p_val, bool):
+                                params[p_name] = float(p_val)
+
                 results.append(
                     {
                         "prompt": prompt,

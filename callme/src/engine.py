@@ -156,12 +156,14 @@ class ConstrainedEngine(BaseModel):
             self.token_set_cache.clear()
             sys_prompt = (
                 "You are a strict JSON formatting AI. Output ONLY a valid JSON object.\n"
+                "CRITICAL: Preserve exact wording from the user request, including escaping literal quotes (\\\").\n"
                 'Format: {"name": "function_name", "parameters": {"arg_name": arg_value}}\n\n'
                 f"Available tools:\n{json.dumps(schema)}\n\n"
                 f"User Request: {prompt}\n"
                 "JSON Output:\n"
             )
 
+            
             input_ids_tensor = self.llm.encode(sys_prompt)
             input_ids = input_ids_tensor[0].tolist() if input_ids_tensor.dim() > 1 else input_ids_tensor.tolist()
             
