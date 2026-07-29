@@ -6,7 +6,7 @@ from llm_sdk import Small_LLM_Model
 from src.engine import ConstrainedEngine
 from src.schema import load_function_definitions
 from src.vocab import VocabFilter
-import time 
+import time
 
 
 def main() -> None:
@@ -76,30 +76,36 @@ def main() -> None:
             continue
 
         raw_output = engine.generate_function_call(
-            prompt,
-            [f.model_dump() for f in functions],
-            max_tokens=120
+            prompt, [f.model_dump() for f in functions], max_tokens=120
         )
         print(f"[TIME] prompt #{i}: {time.time() - t1:.2f}s")
 
         if raw_output:
             try:
                 parsed_json = json.loads(raw_output)
-                 # 1. Extract the raw name and parameters
+                # 1. Extract the raw name and parameters
                 func_name = parsed_json.get("name")
                 params = parsed_json.get("parameters", {})
-                
+
                 # 2. Find the matching function in your loaded Pydantic schema
-                target_func = next((f for f in functions if f.name == func_name), None)
-                
+                target_func = next(
+                    (f for f in functions if f.name == func_name),
+                    None
+                )
+
                 # 3. Check types securely against the schema
                 if target_func:
                     for p_name, p_val in params.items():
                         if p_name in target_func.parameters:
                             expected_type = target_func.parameters[p_name].type
-                            
-                            # ONLY force float if schema explicitly expects "number"
-                            if expected_type == "number" and isinstance(p_val, int) and not isinstance(p_val, bool):
+
+                            # ONLY force float if schema
+                            # explicitly expects "number"
+                            if (
+                                expected_type == "number"
+                                and isinstance(p_val, int)
+                                and not isinstance(p_val, bool)
+                            ):
                                 params[p_name] = float(p_val)
 
                 results.append(

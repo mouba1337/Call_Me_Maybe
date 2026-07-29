@@ -1,4 +1,4 @@
-.PHONY: install run debug clean lint lint-strict
+.PHONY: install run debug clean lint
 
 install:
 	uv sync
@@ -10,15 +10,14 @@ debug:
 	uv run python -m pdb -m src
 
 clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type d -name ".mypy_cache" -exec rm -rf {} +
-	find . -type f -name "*.pyc" -delete
-	rm -rf .venv
+	rm -rf __pycache__ .mypy_cache .pytest_cache
+	find . -type d -name "__pycache__" -exec rm -r {} +
 
 lint:
-	uv run flake8 src
-	uv run mypy --warn-return-any --warn-unused-ignores --ignore-missing-imports --disallow-untyped-defs --check-untyped-defs src
-
-lint-strict:
-	uv run flake8 src
-	uv run mypy --strict src
+	uv run flake8 .
+	uv run mypy . \
+				--warn-return-any \
+				--warn-unused-ignores \
+				--ignore-missing-imports \
+				--disallow-untyped-defs \
+				--check-untyped-defs
